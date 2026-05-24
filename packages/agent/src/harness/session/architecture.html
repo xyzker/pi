@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Session Management Architecture — pi Agent Harness</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --fg: #c9d1d9;
+    --border: #30363d;
+    --accent: #58a6ff;
+    --accent2: #f0883e;
+    --accent3: #3fb950;
+    --accent4: #d2a8ff;
+    --card-bg: #161b22;
+    --code-bg: #1c2128;
+    --dim: #8b949e;
+    --warn: #d29922;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    line-height: 1.6;
+    padding: 2rem;
+  }
+  h1 { font-size: 1.8rem; color: var(--accent); margin-bottom: 0.25rem; }
+  h2 { font-size: 1.3rem; color: var(--accent3); margin: 2rem 0 0.75rem; padding-bottom: 0.35rem; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1.05rem; color: var(--accent4); margin: 1.25rem 0 0.5rem; }
+  .subtitle { color: var(--dim); font-size: 0.9rem; margin-bottom: 1.5rem; }
+  p { margin: 0.5rem 0; }
+  code, pre { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; font-size: 0.85rem; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; overflow-x: auto; margin: 0.75rem 0; }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin: 1rem 0;
+  }
+  .card h3 { margin-top: 0; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; }
+
+  /* Architecture diagram */
+  .arch-container {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin: 1.5rem 0;
+    font-size: 0.85rem;
+    align-items: center;
+  }
+  .arch-layer {
+    display: flex;
+    justify-content: center;
+    gap: 1.2rem;
+    padding: 0.6rem 1rem;
+  }
+  .arch-box {
+    border: 2px solid var(--border);
+    border-radius: 8px;
+    padding: 0.65rem 1.1rem;
+    text-align: center;
+    background: var(--card-bg);
+    min-width: 140px;
+  }
+  .arch-box.api       { border-color: var(--accent);  background: rgba(88,166,255,0.08); }
+  .arch-box.impl      { border-color: var(--accent3); background: rgba(63,185,80,0.08); }
+  .arch-box.storage   { border-color: var(--accent2); background: rgba(240,136,62,0.08); }
+  .arch-box.util      { border-color: var(--warn);    background: rgba(210,153,34,0.08); }
+  .arch-box .name     { font-weight: 700; display: block; }
+  .arch-box .desc     { color: var(--dim); font-size: 0.78rem; }
+  .arch-arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--dim);
+    font-size: 1.3rem;
+    padding: 0.15rem 0;
+    user-select: none;
+  }
+  .arch-arrow span { font-size: 0.7rem; margin: 0 0.4rem; }
+
+  /* Entry type table */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.75rem 0;
+    font-size: 0.85rem;
+  }
+  th, td {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+    text-align: left;
+  }
+  th { background: var(--card-bg); color: var(--accent3); font-weight: 600; }
+  td code { background: var(--code-bg); padding: 0.15rem 0.4rem; border-radius: 4px; }
+
+  /* Tree diagram */
+  .tree-diagram {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 0.82rem;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin: 1rem 0;
+    overflow-x: auto;
+    white-space: pre;
+    line-height: 1.55;
+  }
+
+  /* UUID viz */
+  .uuid-diagram {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 0.8rem;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    margin: 1rem 0;
+    text-align: center;
+  }
+  .uuid-field { display: inline-block; margin: 0 1px; }
+  .uuid-ts  { background: rgba(88,166,255,0.25);  padding: 2px 4px; border-radius: 3px; }
+  .uuid-ver { background: rgba(210,153,34,0.25);  padding: 2px 4px; border-radius: 3px; }
+  .uuid-seq { background: rgba(240,136,62,0.25);  padding: 2px 4px; border-radius: 3px; }
+  .uuid-rand{ background: rgba(63,185,80,0.25);   padding: 2px 4px; border-radius: 3px; }
+  .uuid-legend { margin-top: 0.5rem; font-size: 0.78rem; color: var(--dim); display: flex; justify-content: center; gap: 1rem; flex-wrap: wrap; }
+
+  /* Section nav */
+  .toc {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin: 1rem 0;
+  }
+  .toc a {
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 0.9rem;
+    padding: 0.3rem 0.6rem;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    transition: background 0.2s;
+  }
+  .toc a:hover { background: rgba(88,166,255,0.1); }
+
+  /* Highlight */
+  .hl         { color: var(--accent); }
+  .hl2        { color: var(--accent3); }
+  .hl3        { color: var(--accent2); }
+  .hl4        { color: var(--accent4); }
+  .dim        { color: var(--dim); }
+  .tag        { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; margin-right: 0.3rem; }
+  .tag-api    { background: rgba(88,166,255,0.18);  color: var(--accent); }
+  .tag-impl   { background: rgba(63,185,80,0.18);   color: var(--accent3); }
+  .tag-store  { background: rgba(240,136,62,0.18);  color: var(--accent2); }
+  .tag-util   { background: rgba(210,153,34,0.18);  color: var(--warn); }
+</style>
+</head>
+<body>
+
+<h1>Session Management Architecture</h1>
+<p class="subtitle"><code>packages/agent/src/harness/session/</code> — 7 files that implement the session tree, storage, and repository layer for the pi Agent Harness.</p>
+
+<nav class="toc">
+  <a href="#overview">Overview</a>
+  <a href="#layer-model">Layered Architecture</a>
+  <a href="#data-model">Data Model: The Entry Tree</a>
+  <a href="#uuid">UUID v7</a>
+  <a href="#storage">SessionStorage</a>
+  <a href="#session">Session API</a>
+  <a href="#repo">SessionRepo</a>
+  <a href="#jsonl-format">JSONL Format</a>
+  <a href="#fork">Branching &amp; Forking</a>
+  <a href="#compaction">Compaction</a>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="overview">1. Overview</h2>
+<p>The session system manages <strong>conversation state</strong> for AI coding agents. It stores every user message, assistant reply, tool output, model change, and metadata as a <strong>tree of entries</strong> — not a flat linear transcript. This tree enables branching (forking to explore alternatives), compaction (summarizing old context), and navigation between branches.</p>
+
+<div class="grid-3">
+  <div class="card">
+    <h3><span class="tag tag-store">Storage</span> Two Backends</h3>
+    <p><strong>JSONL files on disk</strong> (<code>jsonl-storage.ts</code>) for production persistence, and <strong>in-memory maps</strong> (<code>memory-storage.ts</code>) for fast tests.</p>
+  </div>
+  <div class="card">
+    <h3><span class="tag tag-api">API</span> Repository Pattern</h3>
+    <p><code>SessionRepo</code> manages collections of sessions (CRUD + fork). <code>Session</code> wraps a <code>SessionStorage</code> to provide a typed append API.</p>
+  </div>
+  <div class="card">
+    <h3><span class="tag tag-impl">Core</span> Tree Structure</h3>
+    <p>Every entry has a <code>parentId</code>. A <strong>leaf pointer</strong> tracks the current tip. Branching just records a new <code>LeafEntry</code> pointing elsewhere.</p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="layer-model">2. Layered Architecture</h2>
+
+<div class="arch-container">
+  <!-- Layer 1: API -->
+  <div class="arch-layer">
+    <div class="arch-box api"><span class="name">SessionRepo</span><span class="desc">Collection CRUD + Fork</span></div>
+    <div class="arch-box api"><span class="name">Session</span><span class="desc">Append entry types, build context</span></div>
+    <div class="arch-box api"><span class="name">buildSessionContext()</span><span class="desc">Tree → messages, model, thinking level</span></div>
+  </div>
+  <div class="arch-arrow"><span class="hl2">┃</span><span>calls</span><span class="hl2">┃</span></div>
+  <!-- Layer 2: Repo impl -->
+  <div class="arch-layer">
+    <div class="arch-box impl"><span class="name">JsonlSessionRepo</span><span class="desc">File-based: dirs by cwd</span></div>
+    <div class="arch-box impl"><span class="name">InMemorySessionRepo</span><span class="desc">Map&lt;id, Session&gt;</span></div>
+  </div>
+  <div class="arch-arrow"><span class="hl2">┃</span><span>creates / opens</span><span class="hl2">┃</span></div>
+  <!-- Layer 3: Storage -->
+  <div class="arch-layer">
+    <div class="arch-box storage"><span class="name">JsonlSessionStorage</span><span class="desc">Read/write .jsonl on disk</span></div>
+    <div class="arch-box storage"><span class="name">InMemorySessionStorage</span><span class="desc">In-memory arrays &amp; maps</span></div>
+  </div>
+  <div class="arch-arrow"><span class="hl2">┃</span><span>implements</span><span class="hl2">┃</span></div>
+  <!-- Layer 4: Interface -->
+  <div class="arch-layer">
+    <div class="arch-box api"><span class="name">SessionStorage&lt;TMetadata&gt;</span><span class="desc">get/setLeafId, appendEntry, getPathToRoot, …</span></div>
+  </div>
+  <div class="arch-arrow"><span class="hl2">┃</span><span>uses helpers from</span><span class="hl2">┃</span></div>
+  <!-- Layer 5: Utilities -->
+  <div class="arch-layer">
+    <div class="arch-box util"><span class="name">repo-utils.ts</span><span class="desc">createSessionId, toSession, getEntriesToFork</span></div>
+    <div class="arch-box util"><span class="name">uuid.ts</span><span class="desc">UUID v7 generator</span></div>
+  </div>
+</div>
+
+<div class="card" style="margin-top: 1.5rem;">
+  <h3>File ↔ Layer Mapping</h3>
+  <table>
+    <tr><th>File</th><th>Layer</th><th>Role</th></tr>
+    <tr><td><code>uuid.ts</code></td><td><span class="tag tag-util">Utility</span></td><td>Time-ordered UUID v7 generation (48-bit timestamp, monotonic sequence, random bits)</td></tr>
+    <tr><td><code>repo-utils.ts</code></td><td><span class="tag tag-util">Utility</span></td><td>Shared factory functions: <code>toSession()</code>, <code>createSessionId()</code>, <code>getEntriesToFork()</code>, FS result unwrapping</td></tr>
+    <tr><td><code>session.ts</code></td><td><span class="tag tag-api">API</span></td><td><code>Session</code> class — typed append methods (<code>appendMessage</code>, <code>appendCompaction</code>, …) + <code>buildSessionContext()</code></td></tr>
+    <tr><td><code>jsonl-storage.ts</code></td><td><span class="tag tag-store">Storage</span></td><td>Persists session entries as JSONL lines on disk. Parses headers, validates structure.</td></tr>
+    <tr><td><code>memory-storage.ts</code></td><td><span class="tag tag-store">Storage</span></td><td>Pure in-memory entries array + byId Map. Identical interface, no I/O.</td></tr>
+    <tr><td><code>jsonl-repo.ts</code></td><td><span class="tag tag-impl">Repo</span></td><td>Manages JSONL sessions in a directory tree keyed by encoded cwd. <code>create</code>/<code>open</code>/<code>list</code>/<code>delete</code>/<code>fork</code>.</td></tr>
+    <tr><td><code>memory-repo.ts</code></td><td><span class="tag tag-impl">Repo</span></td><td>In-memory session Map. Used in tests.</td></tr>
+  </table>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="data-model">3. Data Model: The Entry Tree</h2>
+<p>Every session is a <strong>tree</strong>, not a linear log. Each node is a <code>SessionTreeEntry</code> with <code>id</code>, <code>parentId</code>, <code>timestamp</code>, and a <code>type</code> discriminator. The <strong>leaf pointer</strong> tracks the current active tip; branching writes a new <code>LeafEntry</code> pointing to a different node.</p>
+
+<table>
+  <tr><th>Entry Type</th><th>Key Fields</th><th>Purpose</th></tr>
+  <tr><td><code>message</code></td><td><code>message: AgentMessage</code></td><td>A user/assistant/system chat message or tool call/result</td></tr>
+  <tr><td><code>leaf</code></td><td><code>targetId: string | null</code></td><td>Pointer to the current branch tip. Written on every <code>setLeafId</code>. <strong>This is how branching works.</strong></td></tr>
+  <tr><td><code>label</code></td><td><code>targetId, label</code></td><td>Attaches a user-readable label to an entry (e.g., "good solution")</td></tr>
+  <tr><td><code>compaction</code></td><td><code>summary, firstKeptEntryId, tokensBefore</code></td><td>Records a context compaction: old messages summarized, new context starts from <code>firstKeptEntryId</code></td></tr>
+  <tr><td><code>branch_summary</code></td><td><code>fromId, summary</code></td><td>Summarizes what changed when user navigates to a different branch</td></tr>
+  <tr><td><code>thinking_level_change</code></td><td><code>thinkingLevel</code></td><td>Records a change in thinking mode (off/low/medium/high)</td></tr>
+  <tr><td><code>model_change</code></td><td><code>provider, modelId</code></td><td>Records a model/provider switch</td></tr>
+  <tr><td><code>custom</code></td><td><code>customType, data</code></td><td>Extension point for arbitrary typed entries</td></tr>
+  <tr><td><code>custom_message</code></td><td><code>customType, content, display</code></td><td>Rendered as a message in the UI but with a custom type</td></tr>
+  <tr><td><code>session_info</code></td><td><code>name</code></td><td>Legacy name; stores the session display name</td></tr>
+</table>
+
+<div class="tree-diagram" id="tree-diagram">
+                    ┌──────────────────────────────────────────────┐
+                    │  Session Header (line 0 of .jsonl)            │
+                    │  { type:"session", version:3, id, cwd, ... }  │
+                    └──────────────┬───────────────────────────────┘
+                                   │ parentId: null
+                              ┌────▼────┐
+                              │ message │  id: "a1"  (user: "Write a function")
+                              │  user   │
+                              └────┬────┘
+                                   │
+                              ┌────▼────┐
+                              │ message │  id: "a2"  (assistant: "Here's the code…")
+                              │assistant│
+                              └────┬────┘
+                                   │
+                              ┌────▼────┐
+                              │  leaf   │  id: "a3"  targetId: "a2"  ← leaf pointer
+                              └────┬────┘
+                                   │
+                    ┌──────────────┼──────────────┐
+                    │              │              │
+               ┌────▼────┐   ┌────▼────┐   ┌────▼────┐
+               │ message │   │  leaf   │   │  leaf   │  Branch B: "fix the bug"
+               │  user   │   │targetId:│   │targetId:│
+               │(cont.A) │   │  "a2"   │   │  "a2"   │
+               └────┬────┘   └─────────┘   └────┬────┘
+                    │                            │
+               ┌────▼────┐                 ┌────▼────┐
+               │ message │                 │ message │
+               │assistant│                 │  user   │
+               │(cont.A) │                 │"fix it" │
+               └────┬────┘                 └────┬────┘
+                    │                            │
+               ┌────▼────┐                 ┌────▼────┐
+               │  leaf   │                 │ message │
+               │targetId:│                 │assistant│
+               │ "a5"    │                 │(fix)    │
+               └─────────┘                 └────┬────┘
+                                                │
+                                           ┌────▼────┐
+                                           │  leaf   │
+                                           │targetId:│
+                                           │ "b3"    │
+                                           └─────────┘
+</div>
+<p class="dim" style="font-size:0.82rem; text-align:center;">
+  <strong>Key insight:</strong> Leaf entries create branches. The "current position" in the tree is simply the last leaf's <code>targetId</code>.
+  To switch branches, write a new <code>LeafEntry</code> with a different <code>targetId</code>. The old messages are never deleted — you can always navigate back.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="uuid">4. UUID v7 (uuid.ts)</h2>
+<p>UUID v7 embeds a <strong>48-bit Unix timestamp</strong> (ms) in the first 6 bytes, making IDs lexicographically sortable by creation time. A <strong>monotonic sequence</strong> ensures uniqueness within the same millisecond. The remaining bits use crypto-grade randomness.</p>
+
+<div class="uuid-diagram">
+  <span class="uuid-field uuid-ts">019a8c3e</span>-
+  <span class="uuid-field uuid-ts">5f1a</span>-
+  <span class="uuid-field uuid-ver">7</span><span class="uuid-field uuid-seq">a3b</span>-
+  <span class="uuid-field uuid-seq">8</span><span class="uuid-field uuid-seq uuid-rand">2c1</span>-
+  <span class="uuid-field uuid-rand">d4e5f6a7b8c9</span>
+  <div class="uuid-legend">
+    <span><span class="uuid-ts">█</span> 48-bit timestamp (ms)</span>
+    <span><span class="uuid-ver">█</span> Version (0x7)</span>
+    <span><span class="uuid-seq">█</span> 12+ bits monotonic sequence</span>
+    <span><span class="uuid-rand">█</span> Random bits</span>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Monotonic sequence logic</h3>
+  <pre>// Same millisecond? Increment the 28-bit sequence counter.
+// Sequence overflow (very rare)? Increment the timestamp instead.
+if (timestamp > lastTimestamp) {
+    sequence = random[6..9] as 28-bit integer;  // random seed for new ms
+    lastTimestamp = timestamp;
+} else {
+    sequence = (sequence + 1) >>> 0;             // wraparound safe
+    if (sequence === 0) lastTimestamp++;          // overflow → bump time
+}</pre>
+  <p>Entry IDs only use the first 8 chars of the UUID (via <code>generateEntryId</code>) for compactness, falling back to the full UUID after 100 collisions.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="storage">5. SessionStorage</h2>
+<p>The <code>SessionStorage</code> interface is the low-level contract that both implementations fulfill:</p>
+
+<pre>interface SessionStorage&lt;TMetadata&gt; {
+  getMetadata():       Promise&lt;TMetadata&gt;;             // id, createdAt, (cwd, path for JSONL)
+  getLeafId():         Promise&lt;string | null&gt;;          // current tip of the branch
+  setLeafId(id):       Promise&lt;void&gt;;                   // writes a LeafEntry, moving tip
+  createEntryId():     Promise&lt;string&gt;;                 // generate a unique entry id
+  appendEntry(entry):  Promise&lt;void&gt;;                   // add one entry to the tree
+  getEntry(id):        Promise&lt;SessionTreeEntry | undefined&gt;;
+  findEntries(type):   Promise&lt;SessionTreeEntry[]&gt;;     // filter by entry type
+  getLabel(id):        Promise&lt;string | undefined&gt;;      // label for a given entry id
+  getPathToRoot(leaf): Promise&lt;SessionTreeEntry[]&gt;;      // walk parentId chain up from leaf
+  getEntries():        Promise&lt;SessionTreeEntry[]&gt;;      // all entries
+}</pre>
+
+<div class="grid-2">
+  <div class="card">
+    <h3><span class="dim">impl:</span> JsonlSessionStorage</h3>
+    <p>Persists every entry as a <strong>single JSON line</strong> in a <code>.jsonl</code> file. On open, it reads the entire file, validates the header (version 3), parses all entry lines, and builds <code>byId</code> and <code>labelsById</code> caches. On append, it writes the line to disk and updates caches.</p>
+    <p><strong>Tradeoff:</strong> reads whole file on open, but writes are O(1) appends. The <code>byId</code> map is rebuilt from scratch on each open.</p>
+  </div>
+  <div class="card">
+    <h3><span class="dim">impl:</span> InMemorySessionStorage</h3>
+    <p>Stores entries in a plain <code>SessionTreeEntry[]</code> with a <code>Map&lt;string, SessionTreeEntry&gt;</code> for O(1) lookups. Constructor can optionally seed from existing entries (used during fork). No disk I/O — used exclusively in tests and the harness test suite.</p>
+  </div>
+</div>
+
+<div class="card" style="margin-top: 1rem;">
+  <h3>Shared logic (duplicated between implementations)</h3>
+  <p>Both storage files contain identical copies of these private helpers:</p>
+  <ul style="padding-left: 1.5rem;">
+    <li><code>updateLabelCache()</code> / <code>buildLabelsById()</code> — maintain a <code>targetId → label</code> map from <code>LabelEntry</code> nodes</li>
+    <li><code>generateEntryId()</code> — tries truncated 8-char UUID v7, falls back to full UUID after 100 collisions</li>
+    <li><code>leafIdAfterEntry()</code> — for <code>LeafEntry</code>, return <code>targetId</code>; otherwise return the entry's own <code>id</code></li>
+  </ul>
+  <p class="dim" style="margin-top: 0.5rem;">The duplication is intentional to avoid coupling the two backends. The JSONL backend also has header parsing (<code>parseHeaderLine</code>) and entry validation (<code>parseEntryLine</code>) which are file-format-specific.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="session">6. Session Class (session.ts)</h2>
+<p><code>Session</code> wraps a <code>SessionStorage</code> and provides <strong>typed append methods</strong> that automatically fill in <code>id</code>, <code>parentId</code>, and <code>timestamp</code> from the current leaf. It's the main API used by the harness.</p>
+
+<pre>// Core pattern: every append method follows this shape
+async appendMessage(message: AgentMessage): Promise&lt;string&gt; {
+  return this.appendTypedEntry({
+    type: "message",
+    id:     await this.storage.createEntryId(),    // auto-generated
+    parentId: await this.storage.getLeafId(),       // current tip
+    timestamp: new Date().toISOString(),
+    message,
+  } satisfies MessageEntry);
+}
+
+// Same pattern for: appendThinkingLevelChange, appendModelChange,
+//   appendCompaction, appendCustomEntry, appendLabel, appendSessionName,
+//   appendCustomMessageEntry</pre>
+
+<div class="card">
+  <h3><code>moveTo()</code> — Branch Switching</h3>
+  <pre>async moveTo(entryId: string | null, summary?): Promise&lt;string | undefined&gt; {
+  await this.storage.setLeafId(entryId);    // writes a LeafEntry(targetId: entryId)
+  if (summary) {
+    // Optionally write a BranchSummaryEntry explaining the move
+    return this.appendTypedEntry({ type: "branch_summary", ... });
+  }
+}</pre>
+  <p>This is all there is to branching: call <code>moveTo(someEntryId)</code> and the leaf pointer jumps. A <code>BranchSummaryEntry</code> optionally records <em>why</em> you moved, so the context can include an explanation for the model.</p>
+</div>
+
+<div class="card">
+  <h3><code>buildContext()</code> — Tree → Chat Messages</h3>
+  <pre>async buildContext(): Promise&lt;SessionContext&gt; {
+  return buildSessionContext(await this.getBranch());
+  // getBranch() calls storage.getPathToRoot(leafId)
+  // buildSessionContext() walks the path from root → leaf,
+  //   collecting messages, model/thinking state, and handling compaction
+}</pre>
+
+  <p><code>getBranch()</code> calls <code>getPathToRoot(currentLeafId)</code>, which walks <code>parentId</code> pointers up to the root, returning entries in chronological order. <code>buildSessionContext()</code> then:</p>
+  <ol style="padding-left: 1.5rem;">
+    <li>Scans the path for the <strong>most recent</strong> <code>thinking_level_change</code>, <code>model_change</code>, and assistant <code>message</code> (for model info)</li>
+    <li>If a <code>compaction</code> entry exists, builds the context as: <em>compaction summary → everything after <code>firstKeptEntryId</code></em></li>
+    <li>If no compaction, includes all messages, <code>custom_message</code> entries, and <code>branch_summary</code> entries from the full path</li>
+  </ol>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="repo">7. SessionRepo</h2>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>JsonlSessionRepo</h3>
+    <p>Organizes <code>.jsonl</code> files in a directory tree:</p>
+    <pre>~/.pi/sessions/
+  --home-kexi-projects-myapp--/
+    2026-05-21T10-30-00-000Z_abc123.jsonl
+    2026-05-21T11-15-00-000Z_def456.jsonl
+  --home-kexi-projects-other--/
+    ...</pre>
+    <p>Directory names encode the <strong>cwd</strong> (e.g., <code>/home/kexi/projects/myapp</code> → <code>--home-kexi-projects-myapp--</code>). Session files are named <code>&lt;timestamp&gt;_&lt;uuid&gt;.jsonl</code>.</p>
+    <p><code>list()</code> scans all session dirs, reads only the first line of each <code>.jsonl</code> file (the header) to extract metadata, and sorts by <code>createdAt</code> descending.</p>
+  </div>
+  <div class="card">
+    <h3>InMemorySessionRepo</h3>
+    <p>A trivial <code>Map&lt;string, Session&gt;</code>. Used in tests where no filesystem is available or desired.</p>
+    <pre>class InMemorySessionRepo {
+  private sessions = new Map&lt;string, Session&gt;();
+
+  async create() {
+    const session = toSession(new InMemorySessionStorage({ metadata }));
+    this.sessions.set(metadata.id, session);
+    return session;
+  }
+  // open, list, delete, fork — all trivial map ops
+}</pre>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="jsonl-format">8. JSONL File Format</h2>
+<p>Each <code>.jsonl</code> session file contains one JSON object per line. Line 0 is a <strong>session header</strong>. All subsequent lines are <strong>tree entries</strong>.</p>
+
+<pre>// Line 0 — Session Header
+{"type":"session","version":3,"id":"abc123...","timestamp":"2026-05-21T10:30:00.000Z","cwd":"/home/user/project","parentSession":"/path/to/parent-session.jsonl"}
+
+// Line 1 — First message (user)
+{"type":"message","id":"a1b2c3d4","parentId":null,"timestamp":"2026-05-21T10:30:01.000Z","message":{"role":"user","content":[{"type":"text","text":"Write a function"}]}}
+
+// Line 2 — Assistant reply
+{"type":"message","id":"e5f6g7h8","parentId":"a1b2c3d4","timestamp":"2026-05-21T10:30:05.000Z","message":{"role":"assistant","content":[...],"provider":"anthropic","model":"claude-sonnet-4-20250514"}}
+
+// Line 3 — Leaf pointer (records current tip)
+{"type":"leaf","id":"i9j0k1l2","parentId":"e5f6g7h8","timestamp":"2026-05-21T10:30:05.500Z","targetId":"e5f6g7h8"}
+
+// Line 4 — Compaction (old messages summarized)
+{"type":"compaction","id":"m3n4o5p6","parentId":"e5f6g7h8","timestamp":"...","summary":"User asked for a function...","firstKeptEntryId":"i9j0k1l2","tokensBefore":4500}
+
+// Line 5 — Branch switch (moved to a different point)
+{"type":"branch_summary","id":"q7r8s9t0","parentId":"i9j0k1l2","timestamp":"...","fromId":"i9j0k1l2","summary":"Moved to fix the bug..."}</pre>
+
+<div class="card">
+  <h3>Header Validation</h3>
+  <p>On open, <code>parseHeaderLine()</code> validates: <code>type === "session"</code>, <code>version === 3</code>, <code>id</code> is a non-empty string, <code>timestamp</code> is non-empty, <code>cwd</code> is non-empty. Failures throw <code>SessionError("invalid_session")</code>.</p>
+  <p><code>loadJsonlSessionMetadata()</code> reads only line 0 — this is what <code>list()</code> uses to scan all sessions efficiently.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="fork">9. Branching &amp; Forking</h2>
+
+<h3>Branching within a session (lightweight)</h3>
+<pre>// Session.moveTo() writes a LeafEntry with a different targetId
+await session.moveTo(someEntryId);
+// Future appendMessage() calls now extend from someEntryId</pre>
+<p>The old path is never removed. You can always <code>moveTo()</code> back. This is how the session tree navigator works.</p>
+
+<h3>Forking (creating a new session from an existing one)</h3>
+<pre>// repo-utils.ts:
+export async function getEntriesToFork(storage, options): Promise&lt;SessionTreeEntry[]&gt; {
+  if (!options.entryId) return storage.getEntries();          // fork entire session
+  const target = await storage.getEntry(options.entryId);
+  if (options.position === "at") {
+    effectiveLeafId = target.id;                               // fork AT entry (include it)
+  } else {
+    // "before": only fork entries before this user message
+    effectiveLeafId = target.parentId;                         // fork BEFORE entry
+  }
+  return storage.getPathToRoot(effectiveLeafId);               // only the ancestors
+}</pre>
+
+<div class="card">
+  <h3>Fork Flow</h3>
+  <ol style="padding-left: 1.5rem;">
+    <li><code>repo.fork(sourceMetadata, { entryId?, position?, id? })</code></li>
+    <li>Open the source session, call <code>getEntriesToFork()</code> to compute which entries to copy</li>
+    <li>Create a new <code>.jsonl</code> file with a fresh header (optionally linked via <code>parentSessionPath</code>)</li>
+    <li>Copy each entry from the source into the new session</li>
+    <li>Return the new <code>Session</code> ready for new appends</li>
+  </ol>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="compaction">10. Context Compaction</h2>
+<p>When a conversation grows too large for the model's context window, the harness inserts a <code>CompactionEntry</code>. The compaction entry stores:</p>
+<ul style="padding-left: 1.5rem;">
+  <li><code>summary</code> — LLM-generated summary of old messages</li>
+  <li><code>firstKeptEntryId</code> — the first entry <em>not</em> summarized (i.e., where the "live" context resumes)</li>
+  <li><code>tokensBefore</code> — token count before compaction</li>
+</ul>
+
+<p><code>buildSessionContext()</code> handles this in <code>session.ts</code>:</p>
+<pre>if (compaction) {
+  // 1. Prepend the compaction summary as a system/user message
+  messages.push(createCompactionSummaryMessage(compaction.summary, ...));
+
+  // 2. Find the compaction entry's position in the path
+  // 3. Skip everything BEFORE firstKeptEntryId (already summarized)
+  // 4. Include everything AFTER firstKeptEntryId (still relevant)
+  // 5. Include everything that came AFTER the compaction entry (new messages)
+}</pre>
+
+<p class="dim">Multiple compactions are supported — each one only keeps what came after its <code>firstKeptEntryId</code>. The logic walks the path finding the first compaction and applies the windowing from there.</p>
+
+<!-- ============================================================ -->
+<h2 id="repo-utils">11. repo-utils.ts — The Glue</h2>
+<div class="card">
+  <table>
+    <tr><th>Function</th><th>Purpose</th></tr>
+    <tr><td><code>createSessionId()</code></td><td>Returns <code>uuidv7()</code></td></tr>
+    <tr><td><code>createTimestamp()</code></td><td>Returns <code>new Date().toISOString()</code></td></tr>
+    <tr><td><code>toSession(storage)</code></td><td>Factory: <code>new Session(storage)</code> — wraps a storage backend in the public API</td></tr>
+    <tr><td><code>getFileSystemResultOrThrow(result, msg)</code></td><td>Unwraps <code>Result&lt;T, FileError&gt;</code>. Maps <code>"not_found"</code> to <code>SessionError("not_found")</code>, everything else to <code>SessionError("storage")</code></td></tr>
+    <tr><td><code>getEntriesToFork(storage, opts)</code></td><td>Computes which entries to copy during fork: all, or ancestors up to a specific entry (before/at)</td></tr>
+  </table>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="summary">12. Summary</h2>
+
+<div class="card">
+  <h3>Key Design Decisions</h3>
+  <ul style="padding-left: 1.5rem;">
+    <li><strong>Tree, not log.</strong> Sessions encode branching via <code>LeafEntry</code> nodes, enabling infinite undo/redo and parallel exploration.</li>
+    <li><strong>Repository + Storage split.</strong> <code>SessionRepo</code> manages collections; <code>SessionStorage</code> manages individual session trees. Clean separation of concerns.</li>
+    <li><strong>Two backends, one interface.</strong> JSONL for production, in-memory for testing. Both implement <code>SessionStorage</code> identically.</li>
+    <li><strong>Compaction is a first-class node type.</strong> Instead of modifying existing entries, compaction inserts a <code>CompactionEntry</code> that <code>buildSessionContext()</code> interprets as a window boundary.</li>
+    <li><strong>UUID v7 for sortable IDs.</strong> Time-ordered UUIDs mean chronological sorting is just string comparison, with monotonic sequence for same-ms uniqueness.</li>
+  </ul>
+</div>
+
+<script>
+// Simple dark/light toggle
+document.addEventListener('keydown', (e) => {
+  if (e.key === 't' && e.metaKey) {
+    document.body.style.filter = document.body.style.filter ? '' : 'invert(0.9) hue-rotate(180deg)';
+  }
+});
+</script>
+</body>
+</html>
