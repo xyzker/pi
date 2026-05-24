@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Compaction Subsystem — Architecture</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --accent2: #7ee787;
+    --accent3: #f0883e;
+    --accent4: #d2a8ff;
+    --warn: #f85149;
+    --code-bg: #1c2128;
+    --inline-code: #e6edf3;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 6rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 0.6rem; margin-bottom: 0.75rem; }
+  h2 { font-size: 1.4rem; margin: 2.5rem 0 0.75rem; color: var(--accent2); }
+  h3 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; color: var(--accent4); }
+  p { margin-bottom: 0.75rem; }
+  a { color: var(--accent); }
+  ul, ol { margin: 0.5rem 0 0.5rem 1.5rem; }
+  li { margin-bottom: 0.3rem; }
+
+  /* Code & pre */
+  code {
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+    font-size: 0.875rem;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.1em 0.35em;
+    color: var(--inline-code);
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem;
+    overflow-x: auto;
+    margin: 0.75rem 0 1.25rem;
+    font-size: 0.8rem;
+    line-height: 1.5;
+  }
+  pre code { background: none; border: none; padding: 0; font-size: inherit; }
+
+  /* Cards */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin: 1rem 0;
+  }
+  .card h3 { margin-top: 0; }
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin: 1rem 0; }
+
+  /* Badges */
+  .badge { display: inline-block; font-size: 0.75rem; font-weight: 600; padding: 0.15em 0.55em; border-radius: 999px; margin-right: 0.3rem; }
+  .badge-ts { background: #3178c6; color: #fff; }
+  .badge-export { background: var(--accent2); color: #000; }
+  .badge-internal { background: var(--border); color: var(--text-dim); }
+
+  /* Diagram */
+  .flow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+    margin: 1rem 0;
+    font-family: monospace;
+    font-size: 0.8rem;
+  }
+  .flow-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.4rem 0.7rem;
+    white-space: nowrap;
+  }
+  .flow-arrow { color: var(--text-dim); font-size: 1.2rem; }
+
+  /* Table */
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+  th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); }
+  th { font-weight: 600; color: var(--accent); font-size: 0.85rem; }
+  td { font-size: 0.85rem; }
+
+  /* File bar */
+  .filebar {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px 6px 0 0;
+    padding: 0.3rem 0.75rem;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    font-family: monospace;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .filebar + pre { margin-top: 0; border-top: none; border-radius: 0 0 6px 6px; }
+
+  .note {
+    background: rgba(88, 166, 255, 0.08);
+    border-left: 3px solid var(--accent);
+    padding: 0.75rem 1rem;
+    border-radius: 0 6px 6px 0;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+  }
+</style>
+</head>
+<body>
+
+<h1>Compaction Subsystem</h1>
+<p>
+  The <code>compaction/</code> directory implements context-window management for the pi coding agent.
+  When an LLM conversation grows beyond the model's token budget, this subsystem compresses
+  older message history into structured summaries that preserve the semantic state while
+  reclaiming context-window capacity.
+</p>
+
+<div class="note">
+  <strong>Three files, three responsibilities:</strong>
+  <code>compaction.ts</code> — main compaction engine (cut points, summary generation, split turns)<br>
+  <code>branch-summarization.ts</code> — summarizes abandoned conversation branches<br>
+  <code>utils.ts</code> — shared helpers: file-operation tracking and message serialization
+</div>
+
+<!-- ============================================================ -->
+<h2>File Overview</h2>
+
+<div class="card-grid">
+
+<div class="card">
+  <h3>compaction.ts <span class="badge badge-ts">TS</span></h3>
+  <p>The main engine. Determines <em>when</em> to compact, <em>where</em> to cut, and <em>how</em> to summarize.</p>
+  <ul>
+    <li>Token estimation with provider usage anchoring</li>
+    <li>Cut-point selection respecting turn boundaries</li>
+    <li>LLM-driven summary generation (initial + iterative)</li>
+    <li>Split-turn handling when compaction happens mid-turn</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>branch-summarization.ts <span class="badge badge-ts">TS</span></h3>
+  <p>Handles the case where a user navigates away from a conversation branch.</p>
+  <ul>
+    <li>Collects entries on the abandoned branch path</li>
+    <li>Prepares messages within a token budget</li>
+    <li>Generates a structured branch summary</li>
+    <li>Propagates file-operation metadata from child branches</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>utils.ts <span class="badge badge-ts">TS</span></h3>
+  <p>Shared data structures and serialization logic used by both modules.</p>
+  <ul>
+    <li><code>FileOperations</code> type — tracks read/written/edited files</li>
+    <li><code>extractFileOpsFromMessage</code> — parses tool calls</li>
+    <li><code>serializeConversation</code> — LLM messages → plain text</li>
+    <li><code>computeFileLists</code> / <code>formatFileOperations</code> — sorted XML output</li>
+  </ul>
+</div>
+
+</div>
+
+<!-- ============================================================ -->
+<h2>Architecture &amp; Data Flow</h2>
+
+<h3>Compaction Lifecycle</h3>
+
+<div style="overflow-x:auto; margin: 1rem 0;">
+<pre style="white-space: pre;"><code>
+┌──────────────────────────────────────────────────────────────────────────┐
+│                         COMPACTION LIFECYCLE                             │
+│                                                                          │
+│  1. CHECK        estimateContextTokens() > contextWindow - reserveTokens │
+│       │                                                                  │
+│  2. PREPARE      prepareCompaction(pathEntries, settings)                │
+│       │           ├─ findCutPoint()          → where to cut             │
+│       │           ├─ estimateContextTokens() → tokensBefore              │
+│       │           ├─ extractFileOperations() → fileOps                   │
+│       │           ├─ messagesToSummarize      → AgentMessage[]           │
+│       │           └─ turnPrefixMessages       → AgentMessage[] (if split)│
+│       │                                                                  │
+│  3. SUMMARIZE    compact(preparation, model, apiKey)                     │
+│       │           ├─ generateSummary()        → structured text          │
+│       │           ├─ generateTurnPrefixSummary() → if split turn         │
+│       │           └─ formatFileOperations()   → &lt;read-files&gt; &lt;modified-files&gt;│
+│       │                                                                  │
+│  4. PERSIST      Store CompactionEntry with:                             │
+│                   summary, firstKeptEntryId, tokensBefore, details        │
+└──────────────────────────────────────────────────────────────────────────┘
+</code></pre>
+</div>
+
+<h3>Branch Summarization Flow</h3>
+
+<div style="overflow-x:auto; margin: 1rem 0;">
+<pre style="white-space: pre;"><code>
+┌───────────────────────────────────────────────────────────────────┐
+│                    BRANCH SUMMARIZATION FLOW                      │
+│                                                                   │
+│  User navigates from entry OLD → NEW in session tree              │
+│       │                                                           │
+│  collectEntriesForBranchSummary(session, oldLeafId, targetId)     │
+│       │   ├─ getBranch(oldLeafId)    → old path                   │
+│       │   ├─ getBranch(targetId)     → target path                │
+│       │   ├─ Find commonAncestorId                                │
+│       │   └─ Collect entries from oldLeafId → commonAncestor      │
+│       │                                                           │
+│  prepareBranchEntries(entries, tokenBudget)                       │
+│       │   ├─ Absorb fileOps from existing branch_summary entries  │
+│       │   ├─ Walk entries newest→oldest                           │
+│       │   └─ Stop when tokenBudget exceeded                       │
+│       │                                                           │
+│  generateBranchSummary(entries, options)                          │
+│       │   ├─ serializeConversation(llmMessages)                   │
+│       │   ├─ completeSimple(model, prompt)                        │
+│       │   └─ formatFileOperations(readFiles, modifiedFiles)       │
+│       │                                                           │
+│  Return BranchSummaryResult { summary, readFiles, modifiedFiles } │
+└───────────────────────────────────────────────────────────────────┘
+</code></pre>
+</div>
+
+<!-- ============================================================ -->
+<h2>Exported Symbols</h2>
+
+<h3>compaction.ts</h3>
+<table>
+<tr><th>Symbol</th><th>Kind</th><th>Purpose</th></tr>
+<tr><td><code>DEFAULT_COMPACTION_SETTINGS</code></td><td>const</td><td>enabled: true, reserveTokens: 16384, keepRecentTokens: 20000</td></tr>
+<tr><td><code>SUMMARIZATION_SYSTEM_PROMPT</code></td><td>const</td><td>System prompt instructing the LLM to act as a summarizer (not to continue the conversation)</td></tr>
+<tr><td><code>calculateContextTokens</code></td><td>function</td><td>Sums provider-reported usage tokens (total or input+output+cache)</td></tr>
+<tr><td><code>getLastAssistantUsage</code></td><td>function</td><td>Finds the last successful assistant Usage block in entries</td></tr>
+<tr><td><code>estimateContextTokens</code></td><td>function</td><td>Hybrid estimation: anchor on provider usage, then estimate trailing messages</td></tr>
+<tr><td><code>shouldCompact</code></td><td>function</td><td>Returns true when contextTokens &gt; contextWindow − reserveTokens</td></tr>
+<tr><td><code>estimateTokens</code></td><td>function</td><td>Heuristic token count: chars/4, with special cases for images and tool calls</td></tr>
+<tr><td><code>findTurnStartIndex</code></td><td>function</td><td>Walks backward from an entry to find the user message that starts the turn</td></tr>
+<tr><td><code>findCutPoint</code></td><td>function</td><td>Selects the compaction cut point that keeps ~keepRecentTokens of recent context</td></tr>
+<tr><td><code>generateSummary</code></td><td>function</td><td>Calls the LLM to produce a structured summary; supports iterative updates via previousSummary</td></tr>
+<tr><td><code>prepareCompaction</code></td><td>function</td><td>Orchestrates the preparation phase: cut point, messages, file ops, previous summary</td></tr>
+<tr><td><code>compact</code></td><td>function</td><td>Orchestrates the summarization phase; handles split-turn parallel summarization</td></tr>
+<tr><td><code>serializeConversation</code></td><td>re-export</td><td>Re-exported from utils.ts for convenience</td></tr>
+</table>
+
+<h3>branch-summarization.ts</h3>
+<table>
+<tr><th>Symbol</th><th>Kind</th><th>Purpose</th></tr>
+<tr><td><code>collectEntriesForBranchSummary</code></td><td>function</td><td>Finds entries on the abandoned branch between oldLeafId and the common ancestor</td></tr>
+<tr><td><code>prepareBranchEntries</code></td><td>function</td><td>Selects messages for summarization within a token budget; aggregates file ops</td></tr>
+<tr><td><code>generateBranchSummary</code></td><td>function</td><td>Generates a structured summary of the abandoned branch via LLM</td></tr>
+<tr><td><code>BranchSummaryDetails</code></td><td>interface</td><td>{ readFiles, modifiedFiles } stored on branch_summary entries</td></tr>
+<tr><td><code>BranchPreparation</code></td><td>interface</td><td>{ messages, fileOps, totalTokens } — prepared branch content</td></tr>
+<tr><td><code>CollectEntriesResult</code></td><td>interface</td><td>{ entries, commonAncestorId }</td></tr>
+<tr><td><code>GenerateBranchSummaryOptions</code></td><td>interface</td><td>Options: model, apiKey, headers, signal, customInstructions, replaceInstructions, reserveTokens</td></tr>
+</table>
+
+<h3>utils.ts</h3>
+<table>
+<tr><th>Symbol</th><th>Kind</th><th>Purpose</th></tr>
+<tr><td><code>FileOperations</code></td><td>interface</td><td>{ read: Set&lt;string&gt;, written: Set&lt;string&gt;, edited: Set&lt;string&gt; }</td></tr>
+<tr><td><code>createFileOps</code></td><td>function</td><td>Factory creating an empty FileOperations accumulator</td></tr>
+<tr><td><code>extractFileOpsFromMessage</code></td><td>function</td><td>Parses assistant toolCall blocks for read/write/edit paths</td></tr>
+<tr><td><code>computeFileLists</code></td><td>function</td><td>Computes sorted readFiles (read-only) and modifiedFiles (edited ∪ written)</td></tr>
+<tr><td><code>formatFileOperations</code></td><td>function</td><td>Formats file lists as &lt;read-files&gt; and &lt;modified-files&gt; XML blocks</td></tr>
+<tr><td><code>serializeConversation</code></td><td>function</td><td>Converts LLM Message[] to plain text with role prefixes; truncates tool results at 2000 chars</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>Key Design Decisions</h2>
+
+<div class="card-grid">
+
+<div class="card">
+  <h3>Hybrid Token Estimation</h3>
+  <p><code>estimateContextTokens()</code> anchors on the last successful <code>Usage</code> block from the provider,
+  then adds heuristically-estimated tokens for messages that follow. This gives more accurate
+  context-window tracking than pure character-based heuristics while still working when
+  provider usage data is unavailable.</p>
+</div>
+
+<div class="card">
+  <h3>Turn-Aware Cut Points</h3>
+  <p><code>findCutPoint()</code> avoids cutting in the middle of tool-result sequences by
+  only considering "user-visible" entry boundaries (user messages, assistant replies,
+  branch summaries). <code>findValidCutPoints()</code> explicitly excludes <code>toolResult</code>
+  entries. When the optimal cut falls mid-turn, the system enters <strong>split-turn</strong> mode:
+  the turn prefix is summarized separately so the retained suffix has context.</p>
+</div>
+
+<div class="card">
+  <h3>Iterative Summarization</h3>
+  <p><code>generateSummary()</code> accepts an optional <code>previousSummary</code>. When present,
+  it uses <code>UPDATE_SUMMARIZATION_PROMPT</code> to merge new conversation messages
+  into the existing summary rather than regenerating from scratch. This is critical
+  for sessions that compact multiple times — each compaction builds on the last.</p>
+</div>
+
+<div class="card">
+  <h3>File-Operation Metadata</h3>
+  <p>Every compaction and branch summary records which files were read and modified.
+  This metadata is stored in <code>CompactionDetails</code> / <code>BranchSummaryDetails</code> and
+  propagated forward so the agent always knows which files are relevant, even
+  after the original messages are compacted away.</p>
+</div>
+
+</div>
+
+<!-- ============================================================ -->
+<h2>Summarization Prompt Format</h2>
+
+<p>Both compaction and branch summarization generate structured summaries using this template:</p>
+
+<pre><code>## Goal
+[What is the user trying to accomplish?]
+
+## Constraints &amp; Preferences
+- [Requirements mentioned by user]
+
+## Progress
+### Done
+- [x] [Completed tasks]
+
+### In Progress
+- [ ] [Current work]
+
+### Blocked
+- [Issues preventing progress]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale]
+
+## Next Steps
+1. [Ordered list]
+
+## Critical Context
+- [Data, examples, references needed to continue]
+
+&lt;read-files&gt;
+path/to/file1.ts
+path/to/file2.ts
+&lt;/read-files&gt;
+
+&lt;modified-files&gt;
+path/to/file3.ts
+&lt;/modified-files&gt;</code></pre>
+
+<div class="note">
+  <strong>Branch summaries</strong> use a slightly different template with a preamble:
+  <em>"The user explored a different conversation branch before returning here."</em>
+  The <code>Critical Context</code> section is omitted from branch summaries; they use
+  <code>Constraints &amp; Preferences</code> instead.
+</div>
+
+<!-- ============================================================ -->
+<h2>Session Tree Integration</h2>
+
+<p>
+  Compaction entries are stored in the session tree as <code>CompactionEntry</code> nodes with
+  type <code>"compaction"</code>. They contain:
+</p>
+<ul>
+  <li><code>summary</code> — the LLM-generated structured summary text</li>
+  <li><code>firstKeptEntryId</code> — UUID of the first entry retained after this compaction</li>
+  <li><code>tokensBefore</code> — estimated context tokens before compaction occurred</li>
+  <li><code>details: CompactionDetails</code> — { readFiles, modifiedFiles }</li>
+</ul>
+
+<p>
+  When building session context (<code>buildSessionContext</code>), entries before
+  <code>firstKeptEntryId</code> are replaced by the compaction summary. The summary
+  is injected as a <code>compactionSummary</code>-role message.
+</p>
+
+<!-- ============================================================ -->
+<h2>Error Handling</h2>
+
+<p>
+  Both modules use a <code>Result&lt;T, E&gt;</code> pattern (via <code>ok()</code> / <code>err()</code>)
+  with typed error classes:
+</p>
+<ul>
+  <li><code>CompactionError</code> — codes: <code>"aborted"</code>, <code>"summarization_failed"</code>, <code>"invalid_session"</code></li>
+  <li><code>BranchSummaryError</code> — codes: <code>"aborted"</code>, <code>"summarization_failed"</code></li>
+</ul>
+<p>
+  Aborted/error stop reasons from <code>completeSimple</code> are explicitly surfaced
+  rather than silently swallowed.
+</p>
+
+<!-- ============================================================ -->
+<h2>Entry-to-Message Conversion</h2>
+
+<p>
+  <code>getMessageFromEntry()</code> converts a <code>SessionTreeEntry</code> into an <code>AgentMessage</code>.
+  Both <code>compaction.ts</code> and <code>branch-summarization.ts</code> implement their own versions
+  with slightly different handling:
+</p>
+<table>
+<tr><th>Entry type</th><th>compaction.ts</th><th>branch-summarization.ts</th></tr>
+<tr><td><code>message</code></td><td>Returns entry.message</td><td>Returns entry.message (excludes toolResult)</td></tr>
+<tr><td><code>custom_message</code></td><td>createCustomMessage(...)</td><td>createCustomMessage(...)</td></tr>
+<tr><td><code>branch_summary</code></td><td>createBranchSummaryMessage(...)</td><td>createBranchSummaryMessage(...)</td></tr>
+<tr><td><code>compaction</code></td><td>createCompactionSummaryMessage(...)</td><td>createCompactionSummaryMessage(...)</td></tr>
+<tr><td><code>thinking_level_change</code></td><td>— (undefined)</td><td>— (undefined)</td></tr>
+<tr><td>others</td><td>— (undefined)</td><td>— (undefined)</td></tr>
+</table>
+
+<p>
+  The key difference: <code>getMessageFromEntry()</code> in branch-summarization <strong>excludes</strong>
+  <code>toolResult</code> messages because those are not useful for branch summaries. Compaction's
+  <code>getMessageFromEntryForCompaction()</code> excludes <code>compaction</code> entries themselves to
+  avoid recursive summary nesting.
+</p>
+
+</body>
+</html>
